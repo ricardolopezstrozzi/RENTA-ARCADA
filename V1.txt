@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mis Rentas</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; }
+    #root { min-height: 100vh; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useCallback } = React;
+
+    const TABS = ["Propiedades", "Cobros", "Historial"];
+    const STORAGE_KEY = "rentas-app-data";
+
+    // ─── helpers ────────────────────────────────────────
+    const fmt = (n) => new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" }).format(n);
+    const today = () => new Date().toISOString().slice(0, 10);
+    const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
+    // ─── main ───────────────────────────────────────────
+    function RentasApp() {
+      const [tab, setTab] = useState(0);
+      const [props, setProps] = useState([]);
+      const [payments, setPayments] = useState([]);
+      const [loaded, setLoaded] = useState(false);
+      const [toast, setToast] = useState(null);
+
+      // ── load from localStorage ──
+      useEffect(() => {
+        try {
+          const saved = localStorage.getItem(STORAGE_KEY);
+          if (saved) {
+            const d = JSON.parse(saved);
+            setProps(d.props || []);
+            setPayments(d.payments || []);
+          }
+        } catch {}
+        setLoaded(true);
+      }, []);
+
+      // ── save to localStorage ──
+      const save = useCallback((p, pay) => {
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify({ props: p, payments: pay }));
+        } catch {}
+      }, []);
+
+      const flash = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2200); };
+
+      // ── property CRUD ──
+      const addProp = (p) => { const n = [...props, { ...p, id: uid() }]; setProps(n); save(n, payments); flash("Propiedad guardada"); };
+      const delProp = (id) => { const n = props.filter(x => x.id !== id); setProps(n); save(n, payments); flash("Eliminada"); };
+
+      // ── payment ──
+      const addPayment = (p) => { const n = [...payments, { ...p, id: uid() }]; setPayments(n); save(props, n); flash("Cobro registrado"); };
+      const delPayment = (id) => { const n = payments.filter(x => x.id !== id); setPayments(n); save(props, n); flash("Cobro eliminado"); };
+
+      // ── export CSV ──
+      const exportCSV = () => {
+        const header = "Propiedad,Inquilino,Monto,Fecha,Concepto\n";
+        const rows = payments.map(p => {
+          const pr = props.find(x => x.id === p.propId);
+          return `"${pr?.name || '?'}","${pr?.tenant || ''}",${p.amount},"${p.date}","${p.concept || 'Renta'}"`;
+        }).join("\n");
+        const blob = new Blob([header + rows], { type: "text/csv" });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = `rentas_${today()}.csv`;
+        a.click();
+      };
+
+      if (!loaded) return <div style={styles.loader}>Cargando...</div>;
+
+      return (
+        <div style={styles.shell}>
+          {/* header */}
+          <div style={styles.header}>
+            <span style={styles.logo}>🏠</span>
+            <h1 style={styles.title}>Mis Rentas</h1>
+            <button onClick={exportCSV} style={styles.csvBtn} title="Exportar CSV">📥 CSV</button>
+          </div>
+
+          {/* tabs */}
+          <div style={styles.tabs}>
+            {TABS.map((t, i) => (
+              <button key={t} onClick={() => setTab(i)}
+                style={{ ...styles.tab, ...(tab === i ? styles.tabActive : {}) }}>
+                {t}
+              </button>
+            ))}
+          </div>
+
+          {/* body */}
+          <div style={styles.body}>
+            {tab === 0 && <PropiedadesTab props={props} addProp={addProp} delProp={delProp} />}
+            {tab === 1 && <CobrosTab props={props} addPayment={addPayment} />}
+            {tab === 2 && <HistorialTab props={props} payments={payments} delPayment={delPayment} />}
+          </div>
+
+          {/* toast */}
+          {toast && <div style={styles.toast}>{toast}</div>}
+
+          {/* summary bar */}
+          <div style={styles.footer}>
+            <span>{props.length} propiedades</span>
+            <span>{payments.length} cobros</span>
+            <span>{fmt(payments.reduce((s, p) => s + Number(p.amount), 0))} total</span>
+          </div>
+        </div>
+      );
+    }
+
+    // ═══════════════════════════════════════════════════
+    // TAB: Propiedades
+    // ═══════════════════════════════════════════════════
+    function PropiedadesTab({ props, addProp, delProp }) {
+      const [show, setShow] = useState(false);
+      const [form, setForm] = useState({ name: "", tenant: "", rent: "", address: "" });
+
+      const submit = () => {
+        if (!form.name || !form.rent) return;
+        addProp(form);
+        setForm({ name: "", tenant: "", rent: "", address: "" });
+        setShow(false);
+      };
+
+      return (
+        <div>
+          {!show && (
+            <button onClick={() => setShow(true)} style={styles.addBtn}>+ Agregar propiedad</button>
+          )}
+
+          {show && (
+            <div style={styles.card}>
+              <Input label="Nombre / ID *" value={form.name} onChange={v => setForm({ ...form, name: v })} placeholder="Ej: Depto 4-B" />
+              <Input label="Inquilino" value={form.tenant} onChange={v => setForm({ ...form, tenant: v })} placeholder="Nombre del inquilino" />
+              <Input label="Renta mensual *" value={form.rent} onChange={v => setForm({ ...form, rent: v })} placeholder="$0.00" type="number" />
+              <Input label="Dirección" value={form.address} onChange={v => setForm({ ...form, address: v })} placeholder="Calle, colonia..." />
+              <div style={styles.row}>
+                <button onClick={submit} style={styles.primaryBtn}>Guardar</button>
+                <button onClick={() => setShow(false)} style={styles.ghostBtn}>Cancelar</button>
+              </div>
+            </div>
+          )}
+
+          {props.length === 0 && !show && <Empty msg="Sin propiedades aún. Agrega la primera." />}
+
+          {props.map(p => (
+            <div key={p.id} style={styles.card}>
+              <div style={styles.cardHead}>
+                <strong style={styles.cardTitle}>{p.name}</strong>
+                <span style={styles.rent}>{fmt(Number(p.rent))}/mes</span>
+              </div>
+              {p.tenant && <div style={styles.meta}>👤 {p.tenant}</div>}
+              {p.address && <div style={styles.meta}>📍 {p.address}</div>}
+              <button onClick={() => delProp(p.id)} style={styles.delBtn}>Eliminar</button>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    // ═══════════════════════════════════════════════════
+    // TAB: Cobros
+    // ═══════════════════════════════════════════════════
+    function CobrosTab({ props, addPayment }) {
+      const [form, setForm] = useState({ propId: "", amount: "", date: today(), concept: "Renta" });
+
+      const submit = () => {
+        if (!form.propId || !form.amount) return;
+        addPayment(form);
+        setForm({ propId: "", amount: "", date: today(), concept: "Renta" });
+      };
+
+      const selectProp = (id) => {
+        const p = props.find(x => x.id === id);
+        setForm({ ...form, propId: id, amount: p?.rent || form.amount });
+      };
+
+      if (props.length === 0) return <Empty msg="Primero agrega propiedades en la pestaña anterior." />;
+
+      return (
+        <div>
+          <div style={styles.card}>
+            <label style={styles.label}>Propiedad *</label>
+            <select value={form.propId} onChange={e => selectProp(e.target.value)} style={styles.select}>
+              <option value="">— Seleccionar —</option>
+              {props.map(p => <option key={p.id} value={p.id}>{p.name} ({p.tenant || "sin inquilino"})</option>)}
+            </select>
+
+            <Input label="Monto *" value={form.amount} onChange={v => setForm({ ...form, amount: v })} type="number" />
+            <Input label="Fecha" value={form.date} onChange={v => setForm({ ...form, date: v })} type="date" />
+            <Input label="Concepto" value={form.concept} onChange={v => setForm({ ...form, concept: v })} placeholder="Renta, depósito, agua..." />
+
+            <button onClick={submit} style={styles.primaryBtn}>Registrar cobro</button>
+          </div>
+        </div>
+      );
+    }
+
+    // ═══════════════════════════════════════════════════
+    // TAB: Historial
+    // ═══════════════════════════════════════════════════
+    function HistorialTab({ props, payments, delPayment }) {
+      const [filter, setFilter] = useState("");
+      const sorted = [...payments].sort((a, b) => b.date.localeCompare(a.date));
+      const filtered = filter ? sorted.filter(p => p.propId === filter) : sorted;
+
+      return (
+        <div>
+          {props.length > 1 && (
+            <select value={filter} onChange={e => setFilter(e.target.value)} style={{ ...styles.select, marginBottom: 12 }}>
+              <option value="">Todas las propiedades</option>
+              {props.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          )}
+
+          {filtered.length === 0 && <Empty msg="No hay cobros registrados." />}
+
+          {filtered.map(p => {
+            const pr = props.find(x => x.id === p.propId);
+            return (
+              <div key={p.id} style={styles.card}>
+                <div style={styles.cardHead}>
+                  <div>
+                    <strong style={styles.cardTitle}>{pr?.name || "?"}</strong>
+                    <div style={styles.meta}>{p.concept || "Renta"} · {p.date}</div>
+                  </div>
+                  <span style={styles.amount}>{fmt(Number(p.amount))}</span>
+                </div>
+                <button onClick={() => delPayment(p.id)} style={styles.delBtn}>Eliminar</button>
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+
+    // ═══════════════════════════════════════════════════
+    // Reusable bits
+    // ═══════════════════════════════════════════════════
+    function Input({ label, value, onChange, type = "text", placeholder }) {
+      return (
+        <div style={{ marginBottom: 10 }}>
+          <label style={styles.label}>{label}</label>
+          <input type={type} value={value} onChange={e => onChange(e.target.value)}
+            placeholder={placeholder} style={styles.input} />
+        </div>
+      );
+    }
+
+    function Empty({ msg }) {
+      return <div style={styles.empty}>{msg}</div>;
+    }
+
+    // ═══════════════════════════════════════════════════
+    // Styles
+    // ═══════════════════════════════════════════════════
+    const C = {
+      bg: "#0f1117",
+      surface: "#1a1d27",
+      border: "#2a2d3a",
+      accent: "#4f8cff",
+      accentSoft: "#4f8cff22",
+      text: "#e4e6ed",
+      muted: "#8b8fa3",
+      danger: "#ff5c5c",
+      green: "#34d399",
+    };
+
+    const styles = {
+      shell: { fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif", color: C.text, minHeight: "100vh", background: C.bg, display: "flex", flexDirection: "column" },
+      header: { display: "flex", alignItems: "center", gap: 10, padding: "16px 18px 8px", borderBottom: `1px solid ${C.border}` },
+      logo: { fontSize: 26 },
+      title: { fontSize: 20, fontWeight: 700, flex: 1, margin: 0, letterSpacing: "-0.02em" },
+      csvBtn: { background: C.accentSoft, border: "none", color: C.accent, padding: "6px 12px", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 600 },
+
+      tabs: { display: "flex", gap: 4, padding: "10px 18px 0" },
+      tab: { flex: 1, padding: "10px 0", border: "none", background: "transparent", color: C.muted, fontSize: 14, fontWeight: 600, cursor: "pointer", borderRadius: "10px 10px 0 0", transition: "all .15s" },
+      tabActive: { background: C.surface, color: C.accent },
+
+      body: { flex: 1, padding: 18, overflowY: "auto" },
+
+      card: { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 16, marginBottom: 12 },
+      cardHead: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 },
+      cardTitle: { fontSize: 15, fontWeight: 600 },
+      rent: { color: C.green, fontWeight: 700, fontSize: 15, whiteSpace: "nowrap" },
+      amount: { color: C.accent, fontWeight: 700, fontSize: 17, whiteSpace: "nowrap" },
+      meta: { fontSize: 13, color: C.muted, marginTop: 3 },
+
+      label: { display: "block", fontSize: 12, fontWeight: 600, color: C.muted, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em" },
+      input: { width: "100%", padding: "10px 12px", border: `1px solid ${C.border}`, borderRadius: 8, background: C.bg, color: C.text, fontSize: 15, outline: "none", boxSizing: "border-box" },
+      select: { width: "100%", padding: "10px 12px", border: `1px solid ${C.border}`, borderRadius: 8, background: C.bg, color: C.text, fontSize: 15, outline: "none", boxSizing: "border-box" },
+
+      row: { display: "flex", gap: 10, marginTop: 8 },
+      addBtn: { width: "100%", padding: 14, border: `2px dashed ${C.border}`, borderRadius: 12, background: "transparent", color: C.accent, fontSize: 15, fontWeight: 600, cursor: "pointer" },
+      primaryBtn: { width: "100%", padding: 12, border: "none", borderRadius: 10, background: C.accent, color: "#fff", fontSize: 15, fontWeight: 600, cursor: "pointer", marginTop: 6 },
+      ghostBtn: { width: "100%", padding: 12, border: `1px solid ${C.border}`, borderRadius: 10, background: "transparent", color: C.muted, fontSize: 14, cursor: "pointer", marginTop: 6 },
+      delBtn: { marginTop: 8, background: "none", border: "none", color: C.danger, fontSize: 12, cursor: "pointer", fontWeight: 600, padding: 0, opacity: 0.7 },
+
+      empty: { textAlign: "center", color: C.muted, padding: "40px 20px", fontSize: 14 },
+      toast: { position: "fixed", bottom: 70, left: "50%", transform: "translateX(-50%)", background: C.green, color: "#000", padding: "8px 20px", borderRadius: 20, fontSize: 14, fontWeight: 600, zIndex: 99 },
+
+      footer: { display: "flex", justifyContent: "space-around", padding: "12px 18px", borderTop: `1px solid ${C.border}`, fontSize: 12, color: C.muted, fontWeight: 500 },
+
+      loader: { display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", color: C.muted, fontFamily: "sans-serif" },
+    };
+
+    // ─── render ─────────────────────────────────────────
+    ReactDOM.createRoot(document.getElementById("root")).render(<RentasApp />);
+  </script>
+</body>
+</html>
